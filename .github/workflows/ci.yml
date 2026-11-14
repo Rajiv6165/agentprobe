@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-typecheck:
+    name: Lint & Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff mypy pydantic httpx fastapi pydantic-settings sqlalchemy
+
+      - name: Run Ruff Lint
+        run: python -m ruff check packages/sdk services/api examples
+
+      - name: Run Ruff Format Check
+        run: python -m ruff format --check packages/sdk services/api examples
+
+      - name: Run Mypy Strict on SDK
+        run: python -m mypy packages/sdk/src/agentprobe
+
+  test-sdk:
+    name: SDK Tests & Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install SDK & test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "packages/sdk[dev]"
+
+      - name: Run SDK Tests with Coverage
+        run: |
+          python -m pytest packages/sdk/tests --cov=agentprobe --cov-report=term-missing --cov-report=xml:coverage-sdk.xml --cov-fail-under=85
+
+  test-api:
+    name: API Integration Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agentprobe_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install API & test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "services/api[dev]"
+
+      - name: Run Database Migrations
+        env:
+          SYNC_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/agentprobe_test
+        run: |
+          cd services/api
+          python -m alembic upgrade head
+
+      - name: Run API Tests with Coverage
+        env:
+          AGENTPROBE_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/agentprobe_test
+        run: |
+          cd services/api
+          python -m pytest tests --cov=app --cov-report=term-missing --cov-report=xml:coverage-api.xml --cov-fail-under=85
+
