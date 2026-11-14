@@ -22,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install ruff mypy pydantic httpx fastapi pydantic-settings sqlalchemy
+          python -m pip install ruff==0.17.5 mypy pydantic httpx fastapi pydantic-settings sqlalchemy
 
       - name: Run Ruff Lint
         run: python -m ruff check packages/sdk services/api examples
