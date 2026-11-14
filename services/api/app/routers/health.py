@@ -28,4 +28,3 @@ async def readiness_check(db: AsyncSession = Depends(get_db)) -> dict[str, str]:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "DATABASE_UNAVAILABLE", "message": str(exc)},
         ) from exc
-

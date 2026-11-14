@@ -26,4 +26,3 @@ async def ingest_traces(
 ) -> IngestResponse:
     """Accept and persist a batch of agent runs and spans idempotently."""
     return await process_ingest_batch(db, payload)
-

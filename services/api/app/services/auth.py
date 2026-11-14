@@ -27,4 +27,3 @@ async def verify_api_key(
         )
 
     return x_agentprobe_key
-

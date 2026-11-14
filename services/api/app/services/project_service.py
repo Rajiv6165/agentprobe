@@ -45,4 +45,3 @@ async def get_or_create_project(db: AsyncSession, project_name: str) -> Project:
         await db.flush()
 
     return project
-

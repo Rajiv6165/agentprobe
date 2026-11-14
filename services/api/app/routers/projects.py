@@ -21,4 +21,3 @@ async def get_projects(
     """Retrieve all projects along with aggregate run counts."""
     projects = await list_projects(db)
     return ProjectListResponse(projects=projects)
-
