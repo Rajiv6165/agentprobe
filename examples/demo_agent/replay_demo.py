@@ -20,10 +20,14 @@ if str(SDK_SRC) not in sys.path:
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+import agentprobe as ap  # noqa: E402
 from agentprobe.cassette import Cassette  # noqa: E402
 from agentprobe.replay import ReplayMismatchError, ReplayPolicy, replay  # noqa: E402
 
 from examples.demo_agent.agent import MockLLM_v2, run_support_agent  # noqa: E402
+
+# Initialize SDK in offline exporter mode for self-contained demonstration
+ap.init(exporter="none")
 
 CASSETTE_FILE = Path(__file__).parent / "damaged_order.cassette.json"
 QUESTION = (
