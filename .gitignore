@@ -20,4 +20,5 @@ build/
 # Local trace outputs
 traces.jsonl
 *.log
+examples/demo_agent/*.cassette.json
 
