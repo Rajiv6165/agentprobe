@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = Field(default_factory=lambda: ["*"])
     LOG_LEVEL: str = Field(default="INFO")
     ENVIRONMENT: str = Field(default="development")
+    MAX_CASSETTE_SIZE_BYTES: int = Field(
+        default=10 * 1024 * 1024, alias="AGENTPROBE_MAX_CASSETTE_SIZE_BYTES"
+    )
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

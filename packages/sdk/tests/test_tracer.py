@@ -175,3 +175,31 @@ def test_exception_capture_and_reraise(setup_recording_tracer: RecordingExporter
     # Run status must be set to ERROR
     final_run = exporter.runs[-1]
     assert final_run.status == RunStatus.ERROR
+
+
+def test_timing_monotonicity_and_bounds(setup_recording_tracer: RecordingExporter) -> None:
+    exporter = setup_recording_tracer
+
+    @ap.trace_agent(name="timed_agent")
+    def timed_agent() -> str:
+        with ap.span("inner_op", type=SpanType.TOOL):
+            import time
+
+            time.sleep(0.01)
+        return "done"
+
+    timed_agent()
+
+    assert len(exporter.spans) == 2
+    for s in exporter.spans:
+        assert s.started_at is not None
+        assert s.ended_at is not None
+        assert s.ended_at >= s.started_at
+        assert s.duration_ms is not None
+        assert s.duration_ms >= 5.0  # monotonic counter captured sleep duration
+
+    run = exporter.runs[-1]
+    assert run.started_at is not None
+    assert run.ended_at is not None
+    assert run.ended_at >= run.started_at
+    assert run.totals.latency_ms >= 5.0

@@ -54,7 +54,7 @@ async def db_session(test_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, N
     async with async_session() as session:
         yield session
         # Truncate tables between tests for clean test state
-        await session.execute(text("TRUNCATE TABLE spans, runs, projects CASCADE;"))
+        await session.execute(text("TRUNCATE TABLE cassettes, spans, runs, projects CASCADE;"))
         await session.commit()
 
 

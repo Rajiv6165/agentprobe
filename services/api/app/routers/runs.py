@@ -18,7 +18,7 @@ from app.services.run_service import (
     list_runs,
 )
 
-router = APIRouter(prefix="/v1/runs", tags=["Runs"])
+router = APIRouter(prefix="/v1/runs", tags=["Runs"], dependencies=[Depends(verify_api_key)])
 
 
 @router.get("", response_model=RunListResponse, summary="Query runs with cursor pagination")
@@ -28,6 +28,9 @@ async def get_runs(
         default=None, alias="status", description="Filter by status (running/success/error)"
     ),
     agent_name: str | None = Query(default=None, description="Filter by agent name"),
+    replay_of: uuid.UUID | None = Query(
+        default=None, description="Filter runs that are replays of this run ID"
+    ),
     started_after: datetime | None = Query(
         default=None, description="Filter runs started after ISO datetime"
     ),
@@ -42,7 +45,6 @@ async def get_runs(
     limit: int = Query(default=50, ge=1, le=100, description="Items per page"),
     cursor: str | None = Query(default=None, description="Opaque cursor for pagination"),
     db: AsyncSession = Depends(get_db),
-    _auth: str | None = Depends(verify_api_key),
 ) -> RunListResponse:
     """Retrieve cursor-paginated agent runs filtered by project, status, agent, and date."""
     return await list_runs(
@@ -50,6 +52,7 @@ async def get_runs(
         project=project,
         status=status_filter,
         agent_name=agent_name,
+        replay_of=replay_of,
         started_after=started_after,
         started_before=started_before,
         sort_by=sort_by,
@@ -63,7 +66,6 @@ async def get_runs(
 async def get_run(
     run_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    _auth: str | None = Depends(verify_api_key),
 ) -> RunResponse:
     """Retrieve details, usage totals, and status for a specific execution run."""
     run = await get_run_by_id(db, run_id)
@@ -79,7 +81,6 @@ async def get_run(
 async def get_spans(
     run_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    _auth: str | None = Depends(verify_api_key),
 ) -> list[SpanResponse]:
     """Retrieve chronological flat list of all spans associated with a run."""
     # Ensure run exists
@@ -100,7 +101,6 @@ async def get_spans(
 async def get_tree(
     run_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    _auth: str | None = Depends(verify_api_key),
 ) -> list[SpanTreeNode]:
     """Retrieve execution hierarchy assembled as a nested span tree starting from roots."""
     run = await get_run_by_id(db, run_id)

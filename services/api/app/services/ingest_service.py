@@ -25,21 +25,41 @@ async def process_ingest_batch(db: AsyncSession, batch: IngestRequest) -> Ingest
     for r_item in batch.runs:
         if r_item.id in deduped_runs:
             cur = deduped_runs[r_item.id]
-            if r_item.status != "running":
+            if cur.status in ("success", "error"):
+                if r_item.status == "error":
+                    cur.status = "error"
+            else:
                 cur.status = r_item.status
+            if r_item.agent_name:
+                cur.agent_name = r_item.agent_name
             if r_item.agent_version:
                 cur.agent_version = r_item.agent_version
-            if r_item.ended_at:
-                cur.ended_at = r_item.ended_at
-            cur.totals.prompt_tokens = max(cur.totals.prompt_tokens, r_item.totals.prompt_tokens)
-            cur.totals.completion_tokens = max(
-                cur.totals.completion_tokens, r_item.totals.completion_tokens
-            )
-            cur.totals.total_tokens = max(cur.totals.total_tokens, r_item.totals.total_tokens)
-            cur.totals.cost = max(cur.totals.cost, r_item.totals.cost)
-            cur.totals.step_count = max(cur.totals.step_count, r_item.totals.step_count)
-            cur.totals.latency_ms = max(cur.totals.latency_ms, r_item.totals.latency_ms)
-            cur.metadata.update(r_item.metadata)
+            if r_item.tags:
+                for t in r_item.tags:
+                    if t not in cur.tags:
+                        cur.tags.append(t)
+            if r_item.ended_at is not None:
+                if cur.ended_at is None or r_item.ended_at > cur.ended_at:
+                    cur.ended_at = r_item.ended_at
+            if r_item.totals:
+                cur.totals.prompt_tokens = max(
+                    cur.totals.prompt_tokens, r_item.totals.prompt_tokens
+                )
+                cur.totals.completion_tokens = max(
+                    cur.totals.completion_tokens, r_item.totals.completion_tokens
+                )
+                cur.totals.total_tokens = max(cur.totals.total_tokens, r_item.totals.total_tokens)
+                cur.totals.cost = max(cur.totals.cost, r_item.totals.cost)
+                cur.totals.step_count = max(cur.totals.step_count, r_item.totals.step_count)
+                cur.totals.latency_ms = max(cur.totals.latency_ms, r_item.totals.latency_ms)
+            if r_item.metadata:
+                cur.metadata.update(r_item.metadata)
+            if r_item.replay_of_run_id is not None:
+                cur.replay_of_run_id = r_item.replay_of_run_id
+            if r_item.cassette_id is not None:
+                cur.cassette_id = r_item.cassette_id
+            if r_item.replay_policy is not None:
+                cur.replay_policy = r_item.replay_policy
         else:
             deduped_runs[r_item.id] = r_item.model_copy(deep=True)
 
@@ -48,17 +68,25 @@ async def process_ingest_batch(db: AsyncSession, batch: IngestRequest) -> Ingest
     for s_item in batch.spans:
         if s_item.id in deduped_spans:
             cur_s = deduped_spans[s_item.id]
+            if s_item.name:
+                cur_s.name = s_item.name
+            if s_item.type:
+                cur_s.type = s_item.type
             if s_item.parent_id is not None:
                 cur_s.parent_id = s_item.parent_id
+            if s_item.input is not None:
+                cur_s.input = s_item.input
             if s_item.output is not None:
                 cur_s.output = s_item.output
             if s_item.error is not None:
                 cur_s.error = s_item.error
             if s_item.ended_at is not None:
-                cur_s.ended_at = s_item.ended_at
+                if cur_s.ended_at is None or s_item.ended_at > cur_s.ended_at:
+                    cur_s.ended_at = s_item.ended_at
             if s_item.duration_ms is not None:
-                cur_s.duration_ms = s_item.duration_ms
-            cur_s.metadata.update(s_item.metadata)
+                cur_s.duration_ms = max(cur_s.duration_ms or 0.0, s_item.duration_ms)
+            if s_item.metadata:
+                cur_s.metadata.update(s_item.metadata)
         else:
             deduped_spans[s_item.id] = s_item.model_copy(deep=True)
 
@@ -74,16 +102,39 @@ async def process_ingest_batch(db: AsyncSession, batch: IngestRequest) -> Ingest
         existing_run = res.scalar_one_or_none()
 
         if existing_run:
-            existing_run.status = run_in.status
-            existing_run.agent_name = run_in.agent_name
+            if existing_run.status in ("success", "error"):
+                if run_in.status == "error":
+                    existing_run.status = "error"
+            else:
+                existing_run.status = run_in.status
+
+            if run_in.agent_name:
+                existing_run.agent_name = run_in.agent_name
             if run_in.agent_version:
                 existing_run.agent_version = run_in.agent_version
             if run_in.tags:
-                existing_run.tags = run_in.tags
-            if run_in.ended_at:
-                existing_run.ended_at = run_in.ended_at
+                merged_tags = list(existing_run.tags or [])
+                for t in run_in.tags:
+                    if t not in merged_tags:
+                        merged_tags.append(t)
+                existing_run.tags = merged_tags
+
+            if run_in.ended_at is not None:
+                if existing_run.ended_at is None or run_in.ended_at > existing_run.ended_at:
+                    existing_run.ended_at = run_in.ended_at
+
             if run_in.metadata:
-                existing_run.metadata_json.update(run_in.metadata)
+                merged_meta = dict(existing_run.metadata_json or {})
+                merged_meta.update(run_in.metadata)
+                existing_run.metadata_json = merged_meta
+
+            if run_in.replay_of_run_id is not None:
+                existing_run.replay_of_run_id = run_in.replay_of_run_id
+            if run_in.cassette_id is not None:
+                existing_run.cassette_id = run_in.cassette_id
+            if run_in.replay_policy is not None:
+                existing_run.replay_policy = run_in.replay_policy
+
             if run_in.totals:
                 existing_run.prompt_tokens = max(
                     existing_run.prompt_tokens, run_in.totals.prompt_tokens
@@ -114,6 +165,9 @@ async def process_ingest_batch(db: AsyncSession, batch: IngestRequest) -> Ingest
                 latency_ms=run_in.totals.latency_ms if run_in.totals else 0.0,
                 step_count=run_in.totals.step_count if run_in.totals else 0,
                 metadata_json=dict(run_in.metadata),
+                replay_of_run_id=run_in.replay_of_run_id,
+                cassette_id=run_in.cassette_id,
+                replay_policy=run_in.replay_policy,
             )
             db.add(new_run)
 
@@ -144,8 +198,10 @@ async def process_ingest_batch(db: AsyncSession, batch: IngestRequest) -> Ingest
         existing_span = span_res.scalar_one_or_none()
 
         if existing_span:
-            existing_span.name = span_in.name
-            existing_span.type = span_in.type
+            if span_in.name:
+                existing_span.name = span_in.name
+            if span_in.type:
+                existing_span.type = span_in.type
             if span_in.parent_id is not None:
                 existing_span.parent_id = span_in.parent_id
             if span_in.input is not None:
@@ -155,11 +211,16 @@ async def process_ingest_batch(db: AsyncSession, batch: IngestRequest) -> Ingest
             if span_in.error is not None:
                 existing_span.error = span_in.error
             if span_in.ended_at is not None:
-                existing_span.ended_at = span_in.ended_at
+                if existing_span.ended_at is None or span_in.ended_at > existing_span.ended_at:
+                    existing_span.ended_at = span_in.ended_at
             if span_in.duration_ms is not None:
-                existing_span.duration_ms = span_in.duration_ms
+                existing_span.duration_ms = max(
+                    existing_span.duration_ms or 0.0, span_in.duration_ms
+                )
             if span_in.metadata:
-                existing_span.metadata_json.update(span_in.metadata)
+                merged_span_meta = dict(existing_span.metadata_json or {})
+                merged_span_meta.update(span_in.metadata)
+                existing_span.metadata_json = merged_span_meta
         else:
             new_span = Span(
                 id=span_in.id,
@@ -241,6 +302,10 @@ async def update_run_aggregates(db: AsyncSession, run_id: uuid.UUID) -> None:
 
     if has_error:
         run_obj.status = "error"
-    elif run_obj.status == "running" and any(s.ended_at for s in spans):
-        if run_obj.ended_at and all(s.ended_at is not None for s in spans):
+    elif run_obj.status == "running":
+        if run_obj.ended_at and (not spans or all(s.ended_at is not None for s in spans)):
             run_obj.status = "success"
+        elif any(s.ended_at for s in spans) and run_obj.ended_at:
+            run_obj.status = "success"
+    elif run_obj.status == "success" and has_error:
+        run_obj.status = "error"

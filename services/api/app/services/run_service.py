@@ -69,6 +69,9 @@ def run_to_schema(run: Run) -> RunResponse:
         duration_ms=duration,
         totals=totals,
         metadata=dict(run.metadata_json or {}),
+        replay_of_run_id=run.replay_of_run_id,
+        cassette_id=run.cassette_id,
+        replay_policy=run.replay_policy,
         created_at=run.created_at,
     )
 
@@ -78,6 +81,7 @@ async def list_runs(
     project: str | None = None,
     status: str | None = None,
     agent_name: str | None = None,
+    replay_of: uuid.UUID | None = None,
     started_after: datetime | None = None,
     started_before: datetime | None = None,
     sort_by: str = "created_at",
@@ -103,6 +107,8 @@ async def list_runs(
         filters.append(Run.status == status.lower())
     if agent_name:
         filters.append(Run.agent_name == agent_name)
+    if replay_of:
+        filters.append(Run.replay_of_run_id == replay_of)
     if started_after:
         filters.append(Run.started_at >= started_after)
     if started_before:

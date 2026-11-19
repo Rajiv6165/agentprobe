@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.routers import health, ingest, projects, runs
+from app.routers import cassettes, health, ingest, projects, runs
 
 
 class JsonFormatter(logging.Formatter):
@@ -62,7 +62,20 @@ app.add_middleware(
 
 @app.middleware("http")
 async def request_context_middleware(request: Request, call_next: Any) -> Response:
-    """Inject request ID, compute latency, and log structured HTTP access details."""
+    """Inject request ID, compute latency, enforce payload size limit, and log structured HTTP access details."""
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > settings.MAX_CASSETTE_SIZE_BYTES:
+        return JSONResponse(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            content={
+                "error": {
+                    "code": "PAYLOAD_TOO_LARGE",
+                    "message": f"Payload size {content_length} bytes exceeds limit of {settings.MAX_CASSETTE_SIZE_BYTES} bytes",
+                    "details": None,
+                }
+            },
+        )
+
     request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
     start_time = time.perf_counter()
 
@@ -140,3 +153,4 @@ app.include_router(health.router)
 app.include_router(ingest.router)
 app.include_router(projects.router)
 app.include_router(runs.router)
+app.include_router(cassettes.router)

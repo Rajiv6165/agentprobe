@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import time
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -12,6 +14,15 @@ from typing import Any
 
 import agentprobe as ap
 import httpx
+
+
+def simulate_deterministic_latency(seed_key: str, min_ms: int = 20, max_ms: int = 80) -> float:
+    """Sleep for a seeded, deterministic simulated latency (20-80ms) for realistic trace timing."""
+    hash_val = int(hashlib.sha256(seed_key.encode("utf-8")).hexdigest()[:8], 16)
+    delay_ms = min_ms + (hash_val % (max_ms - min_ms + 1))
+    time.sleep(delay_ms / 1000.0)
+    return float(delay_ms)
+
 
 # Sample document repository for search_docs
 DOCS_KNOWLEDGE_BASE = [
@@ -87,18 +98,15 @@ ORDERS_DATABASE: dict[str, dict[str, Any]] = {
 @ap.trace_tool(name="search_docs")
 def search_docs(query: str) -> list[dict[str, Any]]:
     """Search internal documentation and knowledge base articles."""
+    simulate_deterministic_latency(f"search_docs:{query}")
     q_words = set(re.findall(r"\w+", query.lower()))
     matches: list[dict[str, Any]] = []
 
     for doc in DOCS_KNOWLEDGE_BASE:
-        doc_words = set(
-            re.findall(r"\w+", (doc["title"] + " " + doc["content"]).lower())
-        )
+        doc_words = set(re.findall(r"\w+", (doc["title"] + " " + doc["content"]).lower()))
         overlap = len(q_words.intersection(doc_words))
         if overlap > 0:
-            matches.append(
-                {"doc_id": doc["id"], "title": doc["title"], "content": doc["content"]}
-            )
+            matches.append({"doc_id": doc["id"], "title": doc["title"], "content": doc["content"]})
 
     return matches if matches else [{"message": "No matching documentation found."}]
 
@@ -106,6 +114,7 @@ def search_docs(query: str) -> list[dict[str, Any]]:
 @ap.trace_tool(name="get_order_status")
 def get_order_status(order_id: str) -> dict[str, Any]:
     """Retrieve detailed order, shipping, and fulfillment information by order ID."""
+    simulate_deterministic_latency(f"get_order_status:{order_id}")
     clean_id = order_id.upper().strip()
     if clean_id in ORDERS_DATABASE:
         return {"found": True, "order": ORDERS_DATABASE[clean_id]}
@@ -115,7 +124,8 @@ def get_order_status(order_id: str) -> dict[str, Any]:
 @ap.trace_tool(name="send_email")
 def send_email(recipient: str, subject: str, body: str) -> dict[str, Any]:
     """Send an automated confirmation or notification email to a customer."""
-    message_id = f"msg_{uuid.uuid4().hex[:8]}"
+    simulate_deterministic_latency(f"send_email:{recipient}:{subject}")
+    message_id = ap.capture("generate_message_id", lambda: f"msg_{uuid.uuid4().hex[:8]}")
     return {
         "success": True,
         "message_id": message_id,
@@ -149,9 +159,7 @@ class BaseLLM(ABC):
     model: str = "mock-model"
 
     @abstractmethod
-    def generate(
-        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-    ) -> LLMResponse:
+    def generate(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> LLMResponse:
         """Generate response or tool calls."""
 
 
@@ -160,12 +168,11 @@ class MockLLM(BaseLLM):
 
     model: str = "mock-agentprobe-v1"
 
-    def generate(
-        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-    ) -> LLMResponse:
+    def generate(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> LLMResponse:
         # Determine the user question from initial message
         user_msg = next((m["content"] for m in messages if m.get("role") == "user"), "")
         tool_results = [m for m in messages if m.get("role") == "tool"]
+        simulate_deterministic_latency(f"mock_llm:{user_msg}:{len(tool_results)}")
 
         # Case 1: Order tracking (ORD-99241)
         if "ORD-99241" in user_msg.upper():
@@ -173,9 +180,7 @@ class MockLLM(BaseLLM):
                 return LLMResponse(
                     content=None,
                     tool_calls=[
-                        ToolCall(
-                            name="get_order_status", arguments={"order_id": "ORD-99241"}
-                        )
+                        ToolCall(name="get_order_status", arguments={"order_id": "ORD-99241"})
                     ],
                     prompt_tokens=180,
                     completion_tokens=30,
@@ -223,9 +228,7 @@ class MockLLM(BaseLLM):
                 return LLMResponse(
                     content=None,
                     tool_calls=[
-                        ToolCall(
-                            name="get_order_status", arguments={"order_id": "ORD-10052"}
-                        )
+                        ToolCall(name="get_order_status", arguments={"order_id": "ORD-10052"})
                     ],
                     prompt_tokens=190,
                     completion_tokens=30,
@@ -270,9 +273,7 @@ class MockLLM(BaseLLM):
                     tool_calls=[
                         ToolCall(
                             name="search_docs",
-                            arguments={
-                                "query": "multi-factor authentication mfa reset"
-                            },
+                            arguments={"query": "multi-factor authentication mfa reset"},
                         )
                     ],
                     prompt_tokens=140,
@@ -295,9 +296,7 @@ class MockLLM(BaseLLM):
                 return LLMResponse(
                     content=None,
                     tool_calls=[
-                        ToolCall(
-                            name="get_order_status", arguments={"order_id": "ORD-88123"}
-                        )
+                        ToolCall(name="get_order_status", arguments={"order_id": "ORD-88123"})
                     ],
                     prompt_tokens=180,
                     completion_tokens=30,
@@ -339,6 +338,58 @@ class MockLLM(BaseLLM):
         )
 
 
+class MockLLM_v2(BaseLLM):
+    """Buggy/regressed LLM variant: sends confirmation email BEFORE checking order status."""
+
+    model: str = "mock-agentprobe-v2"
+
+    def generate(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> LLMResponse:
+        user_msg = next((m["content"] for m in messages if m.get("role") == "user"), "")
+        tool_results = [m for m in messages if m.get("role") == "tool"]
+        simulate_deterministic_latency(f"mock_llm_v2:{user_msg}:{len(tool_results)}")
+
+        if "ORD-88123" in user_msg.upper():
+            if len(tool_results) == 0:
+                # REGRESSION: Sends email BEFORE checking order status!
+                return LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            name="send_email",
+                            arguments={
+                                "recipient": "support@example.com",
+                                "subject": "Replacement Request: Order ORD-88123 Damaged in Transit",
+                                "body": "Customer reported headphones damaged in transit. Generating replacement order.",
+                            },
+                        )
+                    ],
+                    prompt_tokens=230,
+                    completion_tokens=40,
+                    cost=0.0010,
+                )
+            if len(tool_results) == 1:
+                return LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(name="get_order_status", arguments={"order_id": "ORD-88123"})
+                    ],
+                    prompt_tokens=180,
+                    completion_tokens=30,
+                    cost=0.0008,
+                )
+            return LLMResponse(
+                content=(
+                    "I verified order ORD-88123 was delivered yesterday. A priority replacement ticket and "
+                    "notification have been dispatched to support@example.com to send you a new pair of headphones."
+                ),
+                prompt_tokens=320,
+                completion_tokens=65,
+                cost=0.0014,
+            )
+
+        return MockLLM().generate(messages, tools)
+
+
 class OpenAILikeLLM(BaseLLM):
     """Real provider client compatible with OpenAI /chat/completions API format."""
 
@@ -356,9 +407,7 @@ class OpenAILikeLLM(BaseLLM):
             timeout=30.0,
         )
 
-    def generate(
-        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-    ) -> LLMResponse:
+    def generate(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> LLMResponse:
         payload = {
             "model": self.model,
             "messages": messages,
@@ -394,8 +443,10 @@ class OpenAILikeLLM(BaseLLM):
         )
 
 
-def get_llm() -> BaseLLM:
+def get_llm(variant: str | None = None) -> BaseLLM:
     """Return real OpenAI-compatible provider if configured, else default to deterministic MockLLM."""
+    if variant == "v2" or os.getenv("AGENTPROBE_LLM_VARIANT") == "v2":
+        return MockLLM_v2()
     if os.getenv("OPENAI_API_KEY"):
         return OpenAILikeLLM()
     return MockLLM()
@@ -452,10 +503,28 @@ TOOL_DEFINITIONS = [
 ]
 
 
+@ap.trace_llm(name="generate_completion")
+def call_llm(
+    llm: BaseLLM, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Execute model inference, interceptable during cassette replay."""
+    response = llm.generate(messages, tools)
+    return {
+        "content": response.content,
+        "tool_calls": [tc.__dict__ for tc in response.tool_calls],
+        "usage": {
+            "prompt_tokens": response.prompt_tokens,
+            "completion_tokens": response.completion_tokens,
+            "total_tokens": response.prompt_tokens + response.completion_tokens,
+            "cost": response.cost,
+        },
+    }
+
+
 @ap.trace_agent(name="customer_support_agent", version="1.0", tags=["demo", "support"])
-def run_support_agent(question: str) -> str:
+def run_support_agent(question: str, llm: BaseLLM | None = None) -> str:
     """Run customer support agent with tool calling loop."""
-    llm = get_llm()
+    active_llm = llm or get_llm()
     messages: list[dict[str, Any]] = [
         {
             "role": "system",
@@ -465,30 +534,17 @@ def run_support_agent(question: str) -> str:
     ]
 
     for _ in range(5):
-        with ap.span("llm_reasoning", type="llm", model=llm.model) as s:
-            s.set_input({"messages": messages})
-            response = llm.generate(messages, TOOL_DEFINITIONS)
-            s.set_output(
-                {
-                    "content": response.content,
-                    "tool_calls": [tc.__dict__ for tc in response.tool_calls],
-                }
-            )
-            s.set_usage(
-                prompt_tokens=response.prompt_tokens,
-                completion_tokens=response.completion_tokens,
-                cost=response.cost,
-            )
+        res_data = call_llm(active_llm, messages, TOOL_DEFINITIONS)
+        tool_calls_data = res_data.get("tool_calls", [])
+        content = res_data.get("content")
 
-        if response.tool_calls:
-            for tc in response.tool_calls:
-                tool_fn = AVAILABLE_TOOLS.get(tc.name)
+        if tool_calls_data:
+            for tc in tool_calls_data:
+                tool_fn = AVAILABLE_TOOLS.get(tc["name"])
                 if tool_fn:
-                    tool_output = tool_fn(**tc.arguments)
-                    messages.append(
-                        {"role": "tool", "name": tc.name, "content": tool_output}
-                    )
+                    tool_output = tool_fn(**tc["arguments"])
+                    messages.append({"role": "tool", "name": tc["name"], "content": tool_output})
         else:
-            return response.content or "No response generated."
+            return str(content) if content is not None else "No response generated."
 
     return "Max conversation turns reached."

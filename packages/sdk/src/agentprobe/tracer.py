@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import inspect
 import logging
+import time
 import traceback
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ from agentprobe.context import (
     set_current_span,
 )
 from agentprobe.models import ErrorDetails, Run, RunStatus, Span, SpanType
+from agentprobe.replay.session import get_current_replay_session
 from agentprobe.transport import BaseExporter, create_exporter
 
 logger = logging.getLogger("agentprobe")
@@ -30,7 +32,11 @@ R = TypeVar("R")
 
 
 class SpanContextManager:
-    """Synchronous and asynchronous context manager for span lifecycle instrumentation."""
+    """Synchronous and asynchronous context manager for span lifecycle instrumentation.
+
+    Note: Context managers record execution only and cannot short-circuit or replay calls.
+    Use @ap.trace_llm and @ap.trace_tool for full deterministic recording and replay interception.
+    """
 
     def __init__(
         self,
@@ -49,6 +55,7 @@ class SpanContextManager:
         self.initial_metadata = metadata
 
         self.span: Span | None = None
+        self._start_perf: float = 0.0
         self._span_token: Any = None
         self._auto_run: Run | None = None
         self._run_token: Any = None
@@ -110,6 +117,11 @@ class SpanContextManager:
                 traceback=tb,
             )
 
+    def set_error_details(self, error: ErrorDetails) -> None:
+        """Directly assign ErrorDetails object onto the span."""
+        if self.span:
+            self.span.error = error
+
     def __enter__(self) -> SpanContextManager:
         active_run = get_current_run()
         if active_run is None:
@@ -131,12 +143,14 @@ class SpanContextManager:
         parent_span = get_current_span()
         parent_id = self.explicit_parent_id or (parent_span.id if parent_span else None)
 
+        self._start_perf = time.perf_counter()
+        now = datetime.now(timezone.utc)
         self.span = Span(
             run_id=run_id,
             parent_id=parent_id,
             type=self.span_type,
             name=self.name,
-            started_at=datetime.now(timezone.utc),
+            started_at=now,
             metadata=dict(self.initial_metadata),
         )
 
@@ -152,10 +166,13 @@ class SpanContextManager:
         if self.span is None:
             return False
 
+        end_perf = time.perf_counter()
         now = datetime.now(timezone.utc)
+        if now < self.span.started_at:
+            now = self.span.started_at
         self.span.ended_at = now
-        duration = (now - self.span.started_at).total_seconds() * 1000.0
-        self.span.duration_ms = max(0.0, duration)
+        duration_ms = (end_perf - self._start_perf) * 1000.0
+        self.span.duration_ms = max(0.0, duration_ms)
 
         active_run = get_current_run()
         if active_run:
@@ -176,6 +193,8 @@ class SpanContextManager:
 
         # If we created an auto-run, close and enqueue it
         if self._auto_run is not None:
+            if now < self._auto_run.started_at:
+                now = self._auto_run.started_at
             self._auto_run.ended_at = now
             if self._auto_run.status == RunStatus.RUNNING:
                 self._auto_run.status = RunStatus.SUCCESS if exc_val is None else RunStatus.ERROR
@@ -242,12 +261,14 @@ class Tracer:
 
                 @functools.wraps(func)
                 async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+                    started_at = datetime.now(timezone.utc)
+                    start_perf = time.perf_counter()
                     run = Run(
                         agent_name=agent_name,
                         agent_version=agent_version,
                         project=run_project,
                         tags=list(run_tags),
-                        started_at=datetime.now(timezone.utc),
+                        started_at=started_at,
                         status=RunStatus.RUNNING,
                     )
                     run_token = set_current_run(run)
@@ -268,7 +289,14 @@ class Tracer:
                         run.status = RunStatus.ERROR
                         raise
                     finally:
-                        run.ended_at = datetime.now(timezone.utc)
+                        now = datetime.now(timezone.utc)
+                        if now < run.started_at:
+                            now = run.started_at
+                        run.ended_at = now
+                        if run.totals.latency_ms == 0.0:
+                            run.totals.latency_ms = max(
+                                0.0, (time.perf_counter() - start_perf) * 1000.0
+                            )
                         self.exporter.enqueue_run(run)
                         reset_current_run(run_token)
 
@@ -276,12 +304,14 @@ class Tracer:
 
             @functools.wraps(func)
             def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+                started_at = datetime.now(timezone.utc)
+                start_perf = time.perf_counter()
                 run = Run(
                     agent_name=agent_name,
                     agent_version=agent_version,
                     project=run_project,
                     tags=list(run_tags),
-                    started_at=datetime.now(timezone.utc),
+                    started_at=started_at,
                     status=RunStatus.RUNNING,
                 )
                 run_token = set_current_run(run)
@@ -302,7 +332,14 @@ class Tracer:
                     run.status = RunStatus.ERROR
                     raise exc
                 finally:
-                    run.ended_at = datetime.now(timezone.utc)
+                    now = datetime.now(timezone.utc)
+                    if now < run.started_at:
+                        now = run.started_at
+                    run.ended_at = now
+                    if run.totals.latency_ms == 0.0:
+                        run.totals.latency_ms = max(
+                            0.0, (time.perf_counter() - start_perf) * 1000.0
+                        )
                     self.exporter.enqueue_run(run)
                     reset_current_run(run_token)
 
@@ -314,7 +351,10 @@ class Tracer:
         self,
         name: str | None = None,
     ) -> Callable[[Callable[P, R]], Callable[P, R]]:
-        """Decorator for tracing tool invocations within an agent run."""
+        """Decorator for tracing and intercepting tool invocations within an agent run.
+
+        In replay mode, returns recorded outputs without executing the underlying function.
+        """
 
         def decorator(func: Callable[P, R]) -> Callable[P, R]:
             tool_name = name or func.__name__
@@ -324,6 +364,32 @@ class Tracer:
                 @functools.wraps(func)
                 async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
                     tool_args = {"args": args, "kwargs": kwargs}
+                    session = get_current_replay_session()
+                    if session is not None:
+                        action, payload = session.intercept("tool", tool_name, tool_args)
+                        if action == "recorded":
+                            async with self.span(
+                                name=tool_name,
+                                type=SpanType.TOOL,
+                                tool_args=tool_args,
+                                replayed=True,
+                                recorded_duration_ms=payload.recorded_duration_ms,
+                            ) as s:
+                                s.set_input(tool_args)
+                                if payload.error is not None:
+                                    s.set_error_details(payload.error)
+                                    raise RuntimeError(
+                                        f"Replayed tool error: {payload.error.message}"
+                                    )
+                                s.set_output(payload.response)
+                                return payload.response  # type: ignore[no-any-return]
+                        elif action == "mock":
+                            if payload.error is not None:
+                                raise payload.error
+                            return payload.value  # type: ignore[no-any-return]
+                        elif action == "skip":
+                            return None  # type: ignore[return-value]
+
                     async with self.span(
                         name=tool_name,
                         type=SpanType.TOOL,
@@ -339,6 +405,30 @@ class Tracer:
             @functools.wraps(func)
             def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
                 tool_args = {"args": args, "kwargs": kwargs}
+                session = get_current_replay_session()
+                if session is not None:
+                    action, payload = session.intercept("tool", tool_name, tool_args)
+                    if action == "recorded":
+                        with self.span(
+                            name=tool_name,
+                            type=SpanType.TOOL,
+                            tool_args=tool_args,
+                            replayed=True,
+                            recorded_duration_ms=payload.recorded_duration_ms,
+                        ) as s:
+                            s.set_input(tool_args)
+                            if payload.error is not None:
+                                s.set_error_details(payload.error)
+                                raise RuntimeError(f"Replayed tool error: {payload.error.message}")
+                            s.set_output(payload.response)
+                            return payload.response
+                    elif action == "mock":
+                        if payload.error is not None:
+                            raise payload.error
+                        return payload.value
+                    elif action == "skip":
+                        return None  # type: ignore[return-value]
+
                 with self.span(
                     name=tool_name,
                     type=SpanType.TOOL,
@@ -352,6 +442,157 @@ class Tracer:
             return sync_wrapper
 
         return decorator
+
+    def trace_llm(
+        self,
+        name: str | None = None,
+        model: str | None = None,
+    ) -> Callable[[Callable[P, R]], Callable[P, R]]:
+        """Decorator for tracing and intercepting LLM model invocations.
+
+        In replay mode, returns recorded responses without executing the underlying function.
+        """
+
+        def decorator(func: Callable[P, R]) -> Callable[P, R]:
+            llm_name = name or func.__name__
+            llm_model = model or "unknown_model"
+
+            if inspect.iscoroutinefunction(func):
+
+                @functools.wraps(func)
+                async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+                    request_payload = {"args": args, "kwargs": kwargs}
+                    session = get_current_replay_session()
+                    if session is not None:
+                        action, payload = session.intercept("llm", llm_name, request_payload)
+                        if action == "recorded":
+                            clean_meta = dict(payload.metadata)
+                            clean_meta.pop("model", None)
+                            clean_meta.pop("type", None)
+                            clean_meta.pop("name", None)
+                            clean_meta.pop("parent_id", None)
+                            clean_meta.pop("run_id", None)
+                            async with self.span(
+                                name=llm_name,
+                                type=SpanType.LLM,
+                                model=llm_model,
+                                replayed=True,
+                                recorded_duration_ms=payload.recorded_duration_ms,
+                                **clean_meta,
+                            ) as s:
+                                s.set_input(request_payload)
+                                if payload.error is not None:
+                                    s.set_error_details(payload.error)
+                                    raise RuntimeError(
+                                        f"Replayed LLM error: {payload.error.message}"
+                                    )
+                                s.set_output(payload.response)
+                                return payload.response  # type: ignore[no-any-return]
+                        elif action == "mock":
+                            if payload.error is not None:
+                                raise payload.error
+                            return payload.value  # type: ignore[no-any-return]
+                        elif action == "skip":
+                            return None  # type: ignore[return-value]
+
+                    async with self.span(
+                        name=llm_name,
+                        type=SpanType.LLM,
+                        model=llm_model,
+                    ) as s:
+                        s.set_input(request_payload)
+                        res = await func(*args, **kwargs)  # type: ignore[misc]
+                        s.set_output(res)
+                        return res  # type: ignore[no-any-return]
+
+                return async_wrapper  # type: ignore[return-value]
+
+            @functools.wraps(func)
+            def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+                request_payload = {"args": args, "kwargs": kwargs}
+                session = get_current_replay_session()
+                if session is not None:
+                    action, payload = session.intercept("llm", llm_name, request_payload)
+                    if action == "recorded":
+                        clean_meta = dict(payload.metadata)
+                        clean_meta.pop("model", None)
+                        clean_meta.pop("type", None)
+                        clean_meta.pop("name", None)
+                        clean_meta.pop("parent_id", None)
+                        clean_meta.pop("run_id", None)
+                        with self.span(
+                            name=llm_name,
+                            type=SpanType.LLM,
+                            model=llm_model,
+                            replayed=True,
+                            recorded_duration_ms=payload.recorded_duration_ms,
+                            **clean_meta,
+                        ) as s:
+                            s.set_input(request_payload)
+                            if payload.error is not None:
+                                s.set_error_details(payload.error)
+                                raise RuntimeError(f"Replayed LLM error: {payload.error.message}")
+                            s.set_output(payload.response)
+                            return payload.response
+                    elif action == "mock":
+                        if payload.error is not None:
+                            raise payload.error
+                        return payload.value
+                    elif action == "skip":
+                        return None  # type: ignore[return-value]
+
+                with self.span(
+                    name=llm_name,
+                    type=SpanType.LLM,
+                    model=llm_model,
+                ) as s:
+                    s.set_input(request_payload)
+                    res = func(*args, **kwargs)
+                    s.set_output(res)
+                    return res
+
+            return sync_wrapper
+
+        return decorator
+
+    def capture(
+        self,
+        name: str,
+        fn: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Capture and record non-deterministic values (time, uuid, random, external state).
+
+        In replay mode, returns the recorded value without re-evaluating fn.
+        """
+        request_payload = {"args": list(args), "kwargs": kwargs}
+        session = get_current_replay_session()
+        if session is not None:
+            action, payload = session.intercept("capture", name, request_payload)
+            if action == "recorded":
+                with self.span(
+                    name=name,
+                    type=SpanType.AGENT,
+                    kind="capture",
+                    replayed=True,
+                ) as s:
+                    s.set_input(request_payload)
+                    s.set_output(payload.response)
+                    return payload.response
+            elif action == "mock":
+                if payload.error is not None:
+                    raise payload.error
+                return payload.value
+            elif action == "skip":
+                return None
+
+        # Live execution
+        with self.span(name=name, type=SpanType.AGENT, kind="capture") as s:
+            s.set_input(request_payload)
+            val = fn(*args, **kwargs)
+            s.set_output(val)
+            return val
 
     def flush(self, timeout: float = 5.0) -> None:
         """Flush pending runs and spans to destination exporter."""

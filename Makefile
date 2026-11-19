@@ -1,39 +1,39 @@
-.PHONY: help up down test lint format migrate demo
+.PHONY: help up down test lint format migrate demo replay-demo
 
 PYTHON ?= python
 
 help:
-	@echo "Available commands:"
-	@echo "  make up       - Build and start PostgreSQL and API services in Docker"
-	@echo "  make down     - Stop and remove Docker containers and volumes"
-	@echo "  make migrate  - Apply database migrations with Alembic"
-	@echo "  make test     - Run pytest test suites for both SDK and API"
-	@echo "  make lint     - Run ruff linter and strict mypy type-checker"
-	@echo "  make format   - Format code across all packages using ruff"
-	@echo "  make demo     - Run the instrumented customer support demo agent"
+	@echo "Available commands (forwards to tasks.py):"
+	@echo "  make up          - Start PostgreSQL and API services in Docker"
+	@echo "  make down        - Stop Docker containers and services"
+	@echo "  make migrate     - Apply database migrations with Alembic"
+	@echo "  make test        - Run pytest test suites for both SDK and API"
+	@echo "  make lint        - Run ruff linter and strict mypy type-checker"
+	@echo "  make format      - Format code across all packages using ruff"
+	@echo "  make demo        - Run the customer support demo agent"
+	@echo "  make replay-demo - Run the cassette replay regression demo"
 
 up:
-	docker compose up -d --build
+	$(PYTHON) tasks.py up
 
 down:
-	docker compose down -v
+	$(PYTHON) tasks.py down
 
 migrate:
-	cd services/api && $(PYTHON) -m alembic upgrade head
+	$(PYTHON) tasks.py migrate
 
 test:
-	$(PYTHON) -m pytest packages/sdk/tests --cov=agentprobe --cov-report=term-missing
-	cd services/api && $(PYTHON) -m pytest tests --cov=app --cov-report=term-missing
+	$(PYTHON) tasks.py test
 
 lint:
-	$(PYTHON) -m ruff check packages/sdk services/api examples
-	$(PYTHON) -m ruff format --check packages/sdk services/api examples
-	$(PYTHON) -m mypy packages/sdk/src/agentprobe
+	$(PYTHON) tasks.py lint
 
 format:
 	$(PYTHON) -m ruff format packages/sdk services/api examples
 	$(PYTHON) -m ruff check --fix packages/sdk services/api examples
 
 demo:
-	$(PYTHON) examples/demo_agent/main.py
+	$(PYTHON) tasks.py demo
 
+replay-demo:
+	$(PYTHON) tasks.py replay-demo

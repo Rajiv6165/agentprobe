@@ -81,6 +81,19 @@ class Run(Base):
     metadata_json: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSONB, default=dict, server_default="{}", nullable=False
     )
+    replay_of_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    cassette_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("cassettes.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    replay_policy: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -90,6 +103,7 @@ class Run(Base):
         Index("ix_runs_agent_name", "agent_name"),
         Index("ix_runs_status", "status"),
         Index("ix_runs_started_at", "started_at"),
+        Index("ix_runs_replay_of", "replay_of_run_id"),
     )
 
     project: Mapped[Project] = relationship("Project", back_populates="runs")
@@ -99,6 +113,42 @@ class Run(Base):
         cascade="all, delete-orphan",
         order_by="asc(Span.started_at)",
     )
+
+
+class Cassette(Base):
+    """A portable deterministic recording of an agent execution run."""
+
+    __tablename__ = "cassettes"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(32), default="1.0", nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_cassettes_project_created", "project_id", "created_at"),
+        Index("ix_cassettes_fingerprint", "fingerprint"),
+    )
+
+    project: Mapped[Project] = relationship("Project")
+    source_run: Mapped[Run | None] = relationship("Run", foreign_keys=[source_run_id])
 
 
 class Span(Base):

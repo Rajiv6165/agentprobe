@@ -66,6 +66,9 @@ class RunIngestItem(BaseModel):
     ended_at: datetime | None = None
     totals: RunTotalsSchema = Field(default_factory=RunTotalsSchema)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    replay_of_run_id: uuid.UUID | None = None
+    cassette_id: uuid.UUID | None = None
+    replay_policy: dict[str, Any] | None = None
 
 
 class SpanIngestItem(BaseModel):
@@ -101,7 +104,7 @@ class IngestResponse(BaseModel):
 
 
 class RunResponse(BaseModel):
-    """Run details including computed aggregates."""
+    """Run details including computed aggregates and replay linkage."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -117,6 +120,9 @@ class RunResponse(BaseModel):
     duration_ms: float | None = None
     totals: RunTotalsSchema
     metadata: dict[str, Any] = Field(default_factory=dict)
+    replay_of_run_id: uuid.UUID | None = None
+    cassette_id: uuid.UUID | None = None
+    replay_policy: dict[str, Any] | None = None
     created_at: datetime
 
 
@@ -166,3 +172,48 @@ class SpanTreeNode(BaseModel):
     duration_ms: float | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     children: list[SpanTreeNode] = Field(default_factory=list)
+
+
+class CassetteCreateRequest(BaseModel):
+    """Optional configuration for building a cassette from a recorded run."""
+
+    name: str | None = None
+
+
+class CassetteSummaryResponse(BaseModel):
+    """Summary metadata for a cassette in query lists."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    source_run_id: uuid.UUID | None = None
+    name: str
+    schema_version: str
+    fingerprint: str
+    size_bytes: int
+    created_at: datetime
+
+
+class CassetteResponse(BaseModel):
+    """Full cassette payload including content JSON."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    source_run_id: uuid.UUID | None = None
+    name: str
+    schema_version: str
+    fingerprint: str
+    content: dict[str, Any]
+    size_bytes: int
+    created_at: datetime
+
+
+class CassetteListResponse(BaseModel):
+    """Paginated cassette search response."""
+
+    cassettes: list[CassetteSummaryResponse]
+    total: int
+    next_cursor: str | None = None

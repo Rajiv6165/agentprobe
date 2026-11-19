@@ -5,12 +5,20 @@ from __future__ import annotations
 import os
 import sys
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 
-import agentprobe as ap
+# Add repository root and SDK src to sys.path
+_ROOT = Path(__file__).resolve().parent.parent.parent
+_SDK_SRC = _ROOT / "packages" / "sdk" / "src"
+if str(_SDK_SRC) not in sys.path:
+    sys.path.insert(0, str(_SDK_SRC))
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
-# Add repository root and examples to sys.path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
-from examples.demo_agent.agent import run_support_agent
+import agentprobe as ap  # noqa: E402
+
+from examples.demo_agent.agent import run_support_agent  # noqa: E402
 
 SAMPLE_QUESTIONS = [
     "Where is my order ORD-99241 and when will it arrive?",
@@ -42,6 +50,8 @@ def main() -> None:
         flush_interval_seconds=0.5,
     )
 
+    demo_start_iso = datetime.now(timezone.utc).isoformat()
+
     for idx, question in enumerate(SAMPLE_QUESTIONS, start=1):
         print(f"\n[{idx}/5] Question: {question}")
         start_time = time.perf_counter()
@@ -55,33 +65,56 @@ def main() -> None:
     ap.flush(timeout=5.0)
     ap.shutdown()
 
-    # Query API for the ingested runs to display links
+    # Query API for the ingested runs to display links in question order
     import httpx
 
     headers = {"X-AgentProbe-Key": api_key} if api_key else {}
     try:
         with httpx.Client(base_url=endpoint, headers=headers, timeout=5.0) as client:
-            resp = client.get("/v1/runs", params={"project": project, "limit": 5})
-            if resp.status_code == 200:
-                runs_data = resp.json().get("runs", [])
-                print("\n" + "=" * 80)
-                print(" Ingestion Summary & Result Links:")
-                print("=" * 80)
-                for r in reversed(runs_data):
-                    r_id = r["id"]
-                    agent_name = r["agent_name"]
-                    status = r["status"]
-                    steps = r["totals"]["step_count"]
-                    tokens = r["totals"]["total_tokens"]
-                    cost = r["totals"]["cost"]
-                    print(f"  * Run ID:   {r_id}")
-                    print(
-                        f"    Agent:    {agent_name} | Status: {status} | Steps: {steps} | "
-                        f"Tokens: {tokens} | Cost: ${cost:.5f}"
-                    )
-                    print(f"    Tree URL: {endpoint}/v1/runs/{r_id}/tree")
-                    print(f"    Run URL:  {endpoint}/v1/runs/{r_id}")
-                    print("    " + "-" * 72)
+            resp = client.get(
+                "/v1/runs",
+                params={
+                    "project": project,
+                    "started_after": demo_start_iso,
+                    "sort_by": "started_at",
+                    "sort_order": "asc",
+                    "limit": len(SAMPLE_QUESTIONS),
+                },
+            )
+            runs_data = resp.json().get("runs", []) if resp.status_code == 200 else []
+            if not runs_data:
+                fallback_resp = client.get(
+                    "/v1/runs",
+                    params={
+                        "project": project,
+                        "sort_by": "started_at",
+                        "sort_order": "asc",
+                        "limit": len(SAMPLE_QUESTIONS),
+                    },
+                )
+                if fallback_resp.status_code == 200:
+                    runs_data = fallback_resp.json().get("runs", [])
+
+            print("\n" + "=" * 80)
+            print(" Ingestion Summary & Result Links (in Question Order):")
+            print("=" * 80)
+            for idx, r in enumerate(runs_data, start=1):
+                r_id = r["id"]
+                agent_name = r["agent_name"]
+                status = r["status"]
+                steps = r["totals"]["step_count"]
+                tokens = r["totals"]["total_tokens"]
+                cost = r["totals"]["cost"]
+                q_text = SAMPLE_QUESTIONS[idx - 1] if idx <= len(SAMPLE_QUESTIONS) else "Question"
+                print(f"  [{idx}] Question: {q_text}")
+                print(f"      Run ID:   {r_id}")
+                print(
+                    f"      Agent:    {agent_name} | Status: {status} | Steps: {steps} | "
+                    f"Tokens: {tokens} | Cost: ${cost:.5f}"
+                )
+                print(f"      Tree URL: {endpoint}/v1/runs/{r_id}/tree")
+                print(f"      Run URL:  {endpoint}/v1/runs/{r_id}")
+                print("      " + "-" * 70)
     except Exception as e:  # noqa: BLE001
         print(f"Notice: Could not fetch run URLs from endpoint {endpoint}: {e}")
 

@@ -7,6 +7,12 @@ import inspect
 from collections.abc import Callable
 from typing import Any
 
+from agentprobe.cassette import (
+    Cassette,
+    FingerprintNormalizer,
+    Interaction,
+    UnsupportedSchemaVersionError,
+)
 from agentprobe.config import AgentProbeConfig
 from agentprobe.context import (
     copy_context_to_thread,
@@ -21,6 +27,18 @@ from agentprobe.models import (
     RunTotals,
     Span,
     SpanType,
+)
+from agentprobe.replay import (
+    Divergence,
+    Live,
+    Mock,
+    ReplayMismatchError,
+    ReplayPolicy,
+    ReplayResult,
+    ReplaySession,
+    Trace,
+    areplay,
+    replay,
 )
 from agentprobe.tracer import SpanContextManager, Tracer
 
@@ -139,6 +157,32 @@ def trace_tool(name: str | None = None) -> Callable[..., Any]:
     return decorator
 
 
+def trace_llm(name: str | None = None, model: str | None = None) -> Callable[..., Any]:
+    """Decorator to instrument and intercept LLM invocations."""
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        if inspect.iscoroutinefunction(func):
+
+            @functools.wraps(func)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                return await get_tracer().trace_llm(name=name, model=model)(func)(*args, **kwargs)
+
+            return async_wrapper
+
+        @functools.wraps(func)
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            return get_tracer().trace_llm(name=name, model=model)(func)(*args, **kwargs)
+
+        return sync_wrapper
+
+    return decorator
+
+
+def capture(name: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Capture a non-deterministic value, replaying it deterministically during replay."""
+    return get_tracer().capture(name, fn, *args, **kwargs)
+
+
 def flush(timeout: float = 5.0) -> None:
     """Flush pending traces to the configured exporter."""
     get_tracer().flush(timeout=timeout)
@@ -153,23 +197,39 @@ def shutdown() -> None:
 
 
 __all__ = [
+    "Cassette",
+    "Divergence",
     "ErrorDetails",
+    "FingerprintNormalizer",
     "IngestBatch",
+    "Interaction",
+    "Live",
+    "Mock",
+    "ReplayMismatchError",
+    "ReplayPolicy",
+    "ReplayResult",
+    "ReplaySession",
     "Run",
     "RunStatus",
     "RunTotals",
     "Span",
     "SpanContextManager",
     "SpanType",
+    "Trace",
     "Tracer",
+    "UnsupportedSchemaVersionError",
+    "areplay",
+    "capture",
     "copy_context_to_thread",
     "flush",
     "get_current_run",
     "get_current_span",
     "get_tracer",
     "init",
+    "replay",
     "shutdown",
     "span",
     "trace_agent",
+    "trace_llm",
     "trace_tool",
 ]

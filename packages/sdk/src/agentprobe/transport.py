@@ -6,6 +6,7 @@ import atexit
 import json
 import logging
 import queue
+import re
 import threading
 import uuid
 from abc import ABC, abstractmethod
@@ -120,9 +121,9 @@ def sanitize_and_truncate(
                 return [_convert(x) for x in obj]
             if isinstance(obj, dict):
                 return {str(k): _convert(v) for k, v in obj.items()}
-            return str(obj)
+            return re.sub(r" at 0x[0-9a-fA-F]+", "", str(obj))
         except Exception:
-            return repr(obj)
+            return re.sub(r" at 0x[0-9a-fA-F]+", "", repr(obj))
 
     converted = _convert(redacted)
 
@@ -192,10 +193,10 @@ class JsonlExporter(BaseExporter):
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def enqueue_run(self, run: Run) -> None:
-        self._write_entry("run", run.model_dump(mode="json"))
+        self._write_entry("run", run.model_dump(mode="python"))
 
     def enqueue_span(self, span: Span) -> None:
-        self._write_entry("span", span.model_dump(mode="json"))
+        self._write_entry("span", span.model_dump(mode="python"))
 
     def _write_entry(self, entry_type: str, data: dict[str, Any]) -> None:
         try:
@@ -310,7 +311,7 @@ class HttpExporter(BaseExporter):
 
     def _send_batch(self, batch: IngestBatch) -> None:
         try:
-            payload = batch.model_dump(mode="json")
+            payload = batch.model_dump(mode="python")
             sanitized = sanitize_and_truncate(payload, self.config)
             response = self._client.post("/v1/ingest", json=sanitized)
             if response.status_code >= 400:

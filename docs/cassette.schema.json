@@ -1,0 +1,231 @@
+{
+  "$defs": {
+    "ErrorDetails": {
+      "description": "Captured exception details.",
+      "properties": {
+        "type": {
+          "description": "Exception class name",
+          "title": "Type",
+          "type": "string"
+        },
+        "message": {
+          "description": "String representation of exception",
+          "title": "Message",
+          "type": "string"
+        },
+        "traceback": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Formatted traceback",
+          "title": "Traceback"
+        }
+      },
+      "required": [
+        "type",
+        "message"
+      ],
+      "title": "ErrorDetails",
+      "type": "object"
+    },
+    "Interaction": {
+      "description": "An individual recorded interaction within a cassette (LLM call, tool invocation, or capture).",
+      "properties": {
+        "index": {
+          "description": "Sequential position of the interaction",
+          "minimum": 0,
+          "title": "Index",
+          "type": "integer"
+        },
+        "kind": {
+          "description": "Category of interaction: llm, tool, or captured non-deterministic value",
+          "enum": [
+            "llm",
+            "tool",
+            "capture"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "description": "Name of the model, tool function, or captured operation",
+          "title": "Name",
+          "type": "string"
+        },
+        "request": {
+          "default": null,
+          "description": "Input arguments or prompt structure",
+          "title": "Request"
+        },
+        "response": {
+          "default": null,
+          "description": "Returned result or model output",
+          "title": "Response"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorDetails"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Captured exception details if failed"
+        },
+        "request_fingerprint": {
+          "description": "Deterministic SHA-256 digest of normalized request",
+          "title": "Request Fingerprint",
+          "type": "string"
+        },
+        "recorded_duration_ms": {
+          "default": 0.0,
+          "description": "Original execution duration",
+          "minimum": 0.0,
+          "title": "Recorded Duration Ms",
+          "type": "number"
+        },
+        "parent_index": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Index of enclosing parent interaction",
+          "title": "Parent Index"
+        },
+        "redacted": {
+          "default": false,
+          "description": "Flag indicating sensitive values were redacted",
+          "title": "Redacted",
+          "type": "boolean"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "description": "Metadata including model and usage",
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "index",
+        "kind",
+        "name",
+        "request_fingerprint"
+      ],
+      "title": "Interaction",
+      "type": "object"
+    }
+  },
+  "description": "Portable deterministic recording of an agent execution run.",
+  "properties": {
+    "schema_version": {
+      "default": "1.0",
+      "description": "Cassette format specification version",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "id": {
+      "description": "Unique cassette identifier",
+      "title": "Id",
+      "type": "string"
+    },
+    "name": {
+      "description": "Human-readable cassette title or scenario label",
+      "title": "Name",
+      "type": "string"
+    },
+    "created_at": {
+      "description": "UTC timestamp of creation",
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "source_run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Original AgentProbe run ID if recorded",
+      "title": "Source Run Id"
+    },
+    "agent_name": {
+      "description": "Name of the instrumented agent",
+      "title": "Agent Name",
+      "type": "string"
+    },
+    "agent_version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Version of the agent",
+      "title": "Agent Version"
+    },
+    "agent_input": {
+      "additionalProperties": true,
+      "description": "Top-level invocation arguments: {'args': [...], 'kwargs': {...}}",
+      "title": "Agent Input",
+      "type": "object"
+    },
+    "agent_output": {
+      "default": null,
+      "description": "Final agent return value",
+      "title": "Agent Output"
+    },
+    "seed": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Random seed used for deterministic execution",
+      "title": "Seed"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "description": "Arbitrary run or environment tags",
+      "title": "Metadata",
+      "type": "object"
+    },
+    "interactions": {
+      "description": "Ordered sequence of intercepted interactions",
+      "items": {
+        "$ref": "#/$defs/Interaction"
+      },
+      "title": "Interactions",
+      "type": "array"
+    }
+  },
+  "required": [
+    "name",
+    "agent_name"
+  ],
+  "title": "Cassette",
+  "type": "object"
+}

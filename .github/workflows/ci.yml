@@ -33,6 +33,10 @@ jobs:
       - name: Run Mypy Strict on SDK
         run: python -m mypy packages/sdk/src/agentprobe
 
+      - name: Verify Cassette Schema Drift
+        run: |
+          python -c "import json, sys; sys.path.insert(0, 'packages/sdk/src'); from agentprobe.cassette.models import Cassette; disk_schema = json.loads(open('docs/cassette.schema.json', 'r', encoding='utf-8').read()); current_schema = Cassette.model_json_schema(); assert disk_schema == current_schema, 'docs/cassette.schema.json has drifted from Cassette.model_json_schema()'"
+
   test-sdk:
     name: SDK Tests & Coverage
     runs-on: ubuntu-latest
